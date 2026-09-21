@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionThread } from "@/hooks/use-session-history";
 import {
+	compareThreadsByActivityDesc,
 	groupScheduledThreads,
 	groupThreadsByProject,
 	scheduleRunLabel,
@@ -43,6 +44,51 @@ describe("sidebar session organization", () => {
 		]);
 		expect(groups[0]?.threads).toHaveLength(12);
 		expect(groups[1]?.threads.map((item) => item.id)).toEqual(["beta-1"]);
+	});
+
+	it("orders a project's threads newest-first when grouped", () => {
+		const threads = [
+			thread("oldest", "/work/acme/repo", {
+				activityAt: Date.parse("2026-07-20T09:00:00.000Z"),
+			}),
+			thread("newest", "/work/acme/repo", {
+				activityAt: Date.parse("2026-07-20T11:00:00.000Z"),
+			}),
+			thread("middle", "/work/acme/repo", {
+				activityAt: Date.parse("2026-07-20T10:00:00.000Z"),
+			}),
+		];
+
+		const groups = groupThreadsByProject(
+			[...threads].sort(compareThreadsByActivityDesc),
+		);
+
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.threads.map((item) => item.id)).toEqual([
+			"newest",
+			"middle",
+			"oldest",
+		]);
+	});
+
+	it("falls back to the start stamp when activity is missing", () => {
+		const threads = [
+			{
+				...thread("older", "/work/acme/repo"),
+				startedAt: "2026-07-19T09:00:00.000Z",
+			},
+			{
+				...thread("newer", "/work/acme/repo"),
+				startedAt: "2026-07-20T09:00:00.000Z",
+			},
+		];
+
+		expect(
+			[...threads]
+				.reverse()
+				.sort(compareThreadsByActivityDesc)
+				.map((item) => item.id),
+		).toEqual(["newer", "older"]);
 	});
 
 	it("uses the repository directory instead of the full workspace path", () => {

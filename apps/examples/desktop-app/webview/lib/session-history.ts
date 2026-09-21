@@ -65,6 +65,14 @@ export interface SessionHistoryItem {
 	startedAt: string;
 	endedAt?: string;
 	lastActivityAt?: string;
+	/**
+	 * When the session *row* was last written. For a still-live run this is the
+	 * last turn boundary, so it is the only local signal that tracks recent
+	 * activity; for a finished run it is unreliable (bulk store migrations and
+	 * stale-status reconciliation rewrite whole batches of rows long after the
+	 * conversation ended). See `sessionActivityTimestamp`.
+	 */
+	updatedAt?: string;
 	metadata?: SessionMetadata;
 }
 

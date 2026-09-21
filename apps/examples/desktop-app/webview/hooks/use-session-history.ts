@@ -36,6 +36,12 @@ export interface SessionThread {
 	codebase: string;
 	workspacePath: string;
 	time: string;
+	/**
+	 * Milliseconds since epoch for `time`, kept alongside it so views that
+	 * regroup rows (per project) can order conversations by last activity
+	 * without reaching back into the source session record.
+	 */
+	activityAt?: number;
 	provider: string;
 	model: string;
 	gitBranch?: string;
@@ -158,11 +164,49 @@ export function parseTimestamp(value?: string): number {
 	return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
 }
 
+/**
+ * Statuses whose session row is still owned by a run that can be prompted
+ * again. Only for these is `updatedAt` a record of turn activity; once a run
+ * is terminal its row can be rewritten by background maintenance, so the
+ * value stops meaning "the user was here".
+ */
+export function isLiveActivityStatus(status: SessionHistoryStatus): boolean {
+	return status === "running" || status === "idle" || status === "provisioning";
+}
+
+/**
+ * The moment a session last counted as activity. It drives both the row order
+ * and the relative-time label, so a list position always agrees with the
+ * "1d"/"3h" shown beside it.
+ *
+ * `lastActivityAt` is only carried by cloud rows. For a local row that is still
+ * live, `updatedAt` is the honest signal — the runtime stamps the session row
+ * when a turn starts and again when it goes idle — so a conversation you just
+ * prompted rises even though it was created days ago. A terminal row ignores
+ * `updatedAt` on purpose: stale-status reconciliation and bulk store migrations
+ * restamp whole batches of finished sessions long after the fact, which would
+ * otherwise drag months-old conversations to the top; those keep ranking by
+ * `endedAt`.
+ */
 export function sessionActivityTimestamp(session: SessionHistoryItem): number {
 	const lastActivityAt = parseTimestamp(session.lastActivityAt);
 	const endedAt = parseTimestamp(session.endedAt);
 	const startedAt = parseTimestamp(session.startedAt);
-	return Math.max(lastActivityAt, endedAt, startedAt);
+	const updatedAt = isLiveActivityStatus(session.status)
+		? parseTimestamp(session.updatedAt)
+		: Number.NEGATIVE_INFINITY;
+	return Math.max(lastActivityAt, endedAt, startedAt, updatedAt);
+}
+
+/**
+ * Relative-time label for a `sessionActivityTimestamp` value. Shared with the
+ * sessions view so the two surfaces never disagree about when a session last
+ * saw activity.
+ */
+export function formatActivityLabel(activityAt: number): string {
+	return formatRelativeTime(
+		Number.isFinite(activityAt) ? String(activityAt) : undefined,
+	);
 }
 
 // Order by last activity, not by start time: a long-running session that was
@@ -306,6 +350,7 @@ function toThread(session: SessionHistoryItem): SessionThread {
 			? session.repoUrl.trim()
 			: (session.workspaceRoot || session.cwd).trim();
 	const schedule = getSessionMetadataSchedule(session.metadata);
+	const activityAt = sessionActivityTimestamp(session);
 	return {
 		id: sessionKey(session),
 		origin: session.origin,
@@ -314,9 +359,8 @@ function toThread(session: SessionHistoryItem): SessionThread {
 		source: getSessionSource(session) || undefined,
 		codebase: basenamePath(workspacePath),
 		workspacePath,
-		time: formatRelativeTime(
-			session.lastActivityAt || session.endedAt || session.startedAt,
-		),
+		time: formatActivityLabel(activityAt),
+		activityAt,
 		provider: session.provider || "",
 		model: session.model || "",
 		gitBranch: getSessionMetadataGitBranch(session.metadata) || undefined,
@@ -437,6 +481,7 @@ function areSessionsEquivalent(
 			a.startedAt !== b.startedAt ||
 			a.endedAt !== b.endedAt ||
 			a.lastActivityAt !== b.lastActivityAt ||
+			a.updatedAt !== b.updatedAt ||
 			a.prompt !== b.prompt ||
 			getSessionMetadataIsScheduled(a.metadata) !==
 				getSessionMetadataIsScheduled(b.metadata) ||
@@ -482,6 +527,7 @@ function areThreadsEquivalent(
 			a.codebase !== b.codebase ||
 			a.workspacePath !== b.workspacePath ||
 			a.time !== b.time ||
+			a.activityAt !== b.activityAt ||
 			a.provider !== b.provider ||
 			a.model !== b.model ||
 			a.gitBranch !== b.gitBranch ||

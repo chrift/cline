@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionKey } from "../lib/session-identity";
 import {
+	formatActivityLabel,
 	sessionActivityTimestamp,
 	useSessionHistory,
 } from "./use-session-history";
@@ -60,6 +61,75 @@ it("uses server activity when it is newer than local timestamps", () => {
 			lastActivityAt: "2026-07-20T12:00:00.000Z",
 		}),
 	).toBe(Date.parse("2026-07-20T12:00:00.000Z"));
+});
+
+it("ranks a still-live session by its last turn, not by when it began", () => {
+	// A conversation started days ago and prompted a moment ago must outrank
+	// one created later but untouched since, or the sidebar would freeze each
+	// chat in place at its creation order.
+	const resumed = {
+		...sessionRow("ses-old"),
+		status: "idle" as const,
+		startedAt: "2026-07-18T10:00:00.000Z",
+		endedAt: undefined,
+		updatedAt: "2026-07-20T13:45:00.000Z",
+	};
+	const untouched = {
+		...sessionRow("ses-new"),
+		status: "idle" as const,
+		startedAt: "2026-07-20T10:00:00.000Z",
+		endedAt: undefined,
+		updatedAt: "2026-07-20T10:05:00.000Z",
+	};
+
+	expect(sessionActivityTimestamp(resumed)).toBe(
+		Date.parse("2026-07-20T13:45:00.000Z"),
+	);
+	expect(sessionActivityTimestamp(resumed)).toBeGreaterThan(
+		sessionActivityTimestamp(untouched),
+	);
+});
+
+it("ignores updatedAt once a session has ended", () => {
+	// Stale-status reconciliation and bulk store migrations restamp whole
+	// batches of finished rows long after the conversation ended; trusting
+	// those writes would float months-old sessions to the top of the list.
+	const monthsOld = {
+		...sessionRow("ses-ancient"),
+		status: "completed" as const,
+		startedAt: "2026-02-13T01:12:21.744Z",
+		endedAt: "2026-02-13T13:06:08.544Z",
+		updatedAt: "2026-09-20T22:58:35.847Z",
+	};
+	const recent = {
+		...sessionRow("ses-recent"),
+		status: "completed" as const,
+		startedAt: "2026-09-19T10:00:00.000Z",
+		endedAt: "2026-09-19T10:30:00.000Z",
+	};
+
+	expect(sessionActivityTimestamp(monthsOld)).toBe(
+		Date.parse("2026-02-13T13:06:08.544Z"),
+	);
+	expect(sessionActivityTimestamp(recent)).toBeGreaterThan(
+		sessionActivityTimestamp(monthsOld),
+	);
+});
+
+it("labels a row with the same activity its order comes from", () => {
+	const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+	const live = {
+		...sessionRow("ses-live"),
+		status: "idle" as const,
+		startedAt: "2026-07-18T10:00:00.000Z",
+		endedAt: undefined,
+		updatedAt: fiveMinutesAgo,
+	};
+
+	// Created days ago, prompted minutes ago: the label reads the activity,
+	// which is also what put it at the top.
+	expect(formatActivityLabel(sessionActivityTimestamp(live))).toBe("5m");
+	expect(formatActivityLabel(Number.NEGATIVE_INFINITY)).toBe("just now");
 });
 
 let container: HTMLDivElement;

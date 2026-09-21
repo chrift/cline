@@ -585,6 +585,44 @@ describe("AgentSidebar session organization", () => {
 		expect(container.textContent).not.toContain("Pinned");
 	});
 
+	it("orders a project's conversations by last activity in project sort", async () => {
+		// History arrives oldest-first; each project must still read
+		// newest-first by last activity, independent of how its rows were
+		// interleaved with other projects' in the global list.
+		const older = {
+			...makeThread("alpha", 1),
+			activityAt: Date.parse("2026-07-20T10:00:00.000Z"),
+		};
+		const newest = {
+			...makeThread("alpha", 2),
+			activityAt: Date.parse("2026-07-20T12:00:00.000Z"),
+		};
+
+		await act(async () => {
+			root.render(
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([older, newest], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
+			);
+		});
+
+		await switchToProjectSort();
+
+		expect(
+			sessionRow("alpha session 2").compareDocumentPosition(
+				sessionRow("alpha session 1"),
+			) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
 	it("loads older history only on explicit Show more clicks", async () => {
 		const tasks = Array.from({ length: 5 }, (_, index) =>
 			makeThread("plain", index + 1),

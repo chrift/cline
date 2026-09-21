@@ -48,6 +48,35 @@ function uniqueWorkspaceLabel(path: string, workspacePaths: string[]): string {
 	return path;
 }
 
+/**
+ * Activity timestamp for a sidebar row. Falls back to the raw start stamp when
+ * a thread was built without `activityAt` (hand-authored rows in tests) so a
+ * missing value degrades to the pre-existing start-time behaviour instead of
+ * scattering rows unpredictably.
+ */
+function threadActivityTimestamp(thread: SessionThread): number {
+	return thread.activityAt ?? parseTimestamp(thread.startedAt);
+}
+
+/**
+ * Newest activity first, mirroring the history comparator's tie-break by
+ * descending id. Used to order conversations inside a project group: the
+ * incoming list is already ordered this way globally, but a project's rows are
+ * interleaved with other projects', so re-sorting here is what makes each
+ * project read "my most recently prompted conversation first" on its own.
+ */
+export function compareThreadsByActivityDesc(
+	left: SessionThread,
+	right: SessionThread,
+): number {
+	const timeDelta =
+		threadActivityTimestamp(right) - threadActivityTimestamp(left);
+	if (timeDelta !== 0) {
+		return timeDelta;
+	}
+	return right.id.localeCompare(left.id);
+}
+
 export function groupThreadsByProject(
 	threads: SessionThread[],
 ): SidebarProjectGroup[] {

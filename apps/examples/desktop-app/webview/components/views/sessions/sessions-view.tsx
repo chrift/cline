@@ -46,8 +46,8 @@ import {
 import { Input } from "@/components/ui/input";
 import {
 	basenamePath,
+	formatActivityLabel,
 	formatCostUsd,
-	formatRelativeTime,
 	type SessionThread,
 	sessionActivityTimestamp,
 	type UseSessionHistoryResult,
@@ -488,11 +488,12 @@ export function SessionsView({ activeSessionId, history }: SessionsViewProps) {
 								? history.pendingAction?.action
 								: null;
 							const workspace = session?.workspaceRoot || session?.cwd || "";
-							const updated = formatRelativeTime(
-								session?.lastActivityAt ||
-									session?.endedAt ||
-									session?.startedAt,
-							);
+							// Same activity key the rows are ordered by, so the
+							// timestamp column agrees with this table's order and
+							// with the sidebar.
+							const updated = session
+								? formatActivityLabel(sessionActivityTimestamp(session))
+								: thread.time;
 							return (
 								<div
 									className={cn(

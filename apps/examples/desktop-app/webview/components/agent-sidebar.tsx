@@ -99,6 +99,7 @@ import {
 	getSessionSources,
 } from "@/lib/session-history";
 import {
+	compareThreadsByActivityDesc,
 	groupScheduledThreads,
 	groupThreadsByProject,
 	INITIAL_VISIBLE_THREAD_COUNT,
@@ -538,12 +539,19 @@ export function AgentSidebar({
 	]);
 	// Pinned threads lead the concatenation, and groupThreadsByProject keeps
 	// insertion order, so each project group reads pinned-by-recency first,
-	// then the rest by recency.
+	// then the rest by recency. Sorting each partition by last activity (rather
+	// than trusting the incoming global order) is what makes a project's own
+	// conversations read newest-first, and because a group is keyed off its
+	// first thread, it also ranks the project groups by recent activity.
 	const projectGroups = useMemo(
 		() =>
 			groupThreadsByProject([
-				...filteredThreads.filter((t) => t.pinned),
-				...filteredThreads.filter((t) => !t.pinned),
+				...filteredThreads
+					.filter((t) => t.pinned)
+					.sort(compareThreadsByActivityDesc),
+				...filteredThreads
+					.filter((t) => !t.pinned)
+					.sort(compareThreadsByActivityDesc),
 			]),
 		[filteredThreads],
 	);
