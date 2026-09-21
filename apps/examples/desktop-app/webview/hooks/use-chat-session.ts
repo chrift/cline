@@ -554,6 +554,13 @@ export function useChatSession(environmentId: string) {
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [status, setStatus] = useState<ChatSessionStatus>("idle");
 	const [isHydratingSession, setIsHydratingSession] = useState(false);
+	// The composer only applies its default effort once the session on screen has
+	// had its reasoning settings resolved (or has been shown to carry none). A
+	// reopened session's effort is unknown until attach answers, and a default
+	// written in that window is sent back and overwrites the session's real
+	// setting. Every path that ends or supersedes a hydration has to release this
+	// gate, or the thinking selector stays inert.
+	const [isReasoningResolved, setIsReasoningResolved] = useState(true);
 	const [isCloudSessionExpired, setIsCloudSessionExpired] = useState(false);
 	const [config, setConfig] = useState<ChatSessionConfig>(() =>
 		getInitialChatConfig(environmentId),
@@ -2564,6 +2571,7 @@ export function useChatSession(environmentId: string) {
 		): Promise<string> => {
 			hydrationRequestIdRef.current += 1;
 			setIsHydratingSession(false);
+			setIsReasoningResolved(true);
 			const boundConfig = { ...validatedConfig, environmentId };
 			const payload = await postSession({
 				action: "start",
@@ -2635,6 +2643,7 @@ export function useChatSession(environmentId: string) {
 			setError(null);
 			setStatus("starting");
 			setIsHydratingSession(false);
+			setIsReasoningResolved(true);
 			abortedRef.current = false;
 			clearAbortFallbackTimeout();
 			discardPendingStream();
@@ -2688,6 +2697,7 @@ export function useChatSession(environmentId: string) {
 
 			setError(null);
 			setIsHydratingSession(false);
+			setIsReasoningResolved(true);
 			abortedRef.current = false;
 			clearAbortFallbackTimeout();
 			const pendingSessionStart = sessionStartPromiseRef.current;
@@ -3597,6 +3607,7 @@ export function useChatSession(environmentId: string) {
 			clearAbortFallbackTimeout();
 			setError(null);
 			setIsHydratingSession(false);
+			setIsReasoningResolved(true);
 			activeAssistantMessageIdRef.current = null;
 			setActiveAssistantMessageId(null);
 			setPendingToolApprovals([]);
@@ -3715,6 +3726,7 @@ export function useChatSession(environmentId: string) {
 		setSessionId(null);
 		setStatus("idle");
 		setIsHydratingSession(false);
+		setIsReasoningResolved(true);
 		setIsCloudSessionExpired(false);
 		abortedRef.current = false;
 		clearAbortFallbackTimeout();
@@ -3800,6 +3812,7 @@ export function useChatSession(environmentId: string) {
 			setError(null);
 			setStatus("starting");
 			setIsHydratingSession(true);
+			setIsReasoningResolved(false);
 			resetStreamDedupe(session.sessionId);
 			abortedRef.current = false;
 			clearAbortFallbackTimeout();
@@ -3818,6 +3831,10 @@ export function useChatSession(environmentId: string) {
 				model: session.model || prev.model,
 				workspaceRoot: session.workspaceRoot || prev.workspaceRoot,
 				cwd: session.workspaceRoot || session.cwd || prev.cwd,
+				// Drop the previous session's settings before this one's attach
+				// answers, so the selector never shows another chat's effort.
+				thinking: undefined,
+				reasoningEffort: undefined,
 			}));
 			activeSessionIdRef.current = session.sessionId;
 			activeAssistantMessageIdRef.current = null;
@@ -3902,6 +3919,8 @@ export function useChatSession(environmentId: string) {
 						branch?: string;
 						prompt?: string;
 						environmentId?: string;
+						thinking?: boolean;
+						reasoningEffort?: "low" | "medium" | "high" | "xhigh";
 					}>("chat_session_command", {
 						request: {
 							action: "attach",
@@ -3934,6 +3953,13 @@ export function useChatSession(environmentId: string) {
 						`Session ${session.sessionId} attached to environment ${attached.environmentId}, not ${environmentId}.`,
 					);
 				}
+				// The host owns the reopened session's effort level, so it can only come
+				// from attach. An attach that reports no reasoning means the session
+				// never had an explicit choice: leave the client's value alone rather
+				// than clearing it and letting the composer default rewrite the session.
+				const attachedCarriesReasoning =
+					attached?.thinking !== undefined ||
+					attached?.reasoningEffort !== undefined;
 				setConfig((prev) => ({
 					...prev,
 					environmentId,
@@ -3957,6 +3983,12 @@ export function useChatSession(environmentId: string) {
 						session.workspaceRoot ||
 						session.cwd ||
 						prev.cwd,
+					...(attachedCarriesReasoning
+						? {
+								thinking: attached?.thinking,
+								reasoningEffort: attached?.reasoningEffort,
+							}
+						: {}),
 				}));
 				if (
 					session.origin === "cloud" &&
@@ -4013,6 +4045,9 @@ export function useChatSession(environmentId: string) {
 			} finally {
 				if (hydrationRequestIdRef.current === requestId) {
 					setIsHydratingSession(false);
+					// Attach has answered (or failed): the session's reasoning settings
+					// are as resolved as they will get, so the composer may default.
+					setIsReasoningResolved(true);
 				}
 			}
 		},
@@ -4194,6 +4229,7 @@ export function useChatSession(environmentId: string) {
 		chatTransportState,
 		chatTransportError,
 		isHydratingSession,
+		isReasoningResolved,
 		activeAssistantMessageId,
 		activityLabel,
 		config,

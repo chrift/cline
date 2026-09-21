@@ -313,6 +313,12 @@ type ChatInputBarProps = {
 	mode: "act" | "plan";
 	thinking: ChatSessionConfig["thinking"];
 	reasoningEffort: ChatSessionConfig["reasoningEffort"];
+	/**
+	 * False while a reopened session's reasoning settings are still being
+	 * resolved by attach. Suppresses the default effort so it is neither shown
+	 * nor written—and then sent back as the session's level (#14264).
+	 */
+	reasoningResolved?: boolean;
 	/** Branch name, "no-git" for a non-repo folder, null while discovery is pending. */
 	gitBranch: string | null;
 	executionTarget?: "local" | "cloud";
@@ -363,6 +369,7 @@ function ChatInputBarImpl({
 	mode,
 	thinking,
 	reasoningEffort,
+	reasoningResolved = true,
 	gitBranch,
 	executionTarget = "local",
 	repoUrl,
@@ -945,8 +952,14 @@ function ChatInputBarImpl({
 	}, [executionTarget, onProviderChange, provider]);
 	const hasExplicitReasoningSelection =
 		thinking !== undefined || reasoningEffort !== undefined;
+	// A reopened session's level is unknown until attach answers, and an unknown
+	// falls back to the display default below. Label it pending instead of
+	// claiming "Low" for a chat the user configured otherwise.
+	const isReasoningPending =
+		!reasoningResolved && !hasExplicitReasoningSelection;
 	const effortLabel =
-		!hasExplicitReasoningSelection && modelSupportsReasoning === null
+		isReasoningPending ||
+		(!hasExplicitReasoningSelection && modelSupportsReasoning === null)
 			? "Reasoning"
 			: !hasExplicitReasoningSelection && modelSupportsReasoning === false
 				? "None"
@@ -971,12 +984,19 @@ function ChatInputBarImpl({
 	useEffect(() => {
 		if (
 			modelSupportsReasoning === true &&
+			reasoningResolved &&
 			thinking === undefined &&
 			reasoningEffort === undefined
 		) {
 			onReasoningChange(buildReasoningConfig(DEFAULT_REASONING_EFFORT));
 		}
-	}, [modelSupportsReasoning, onReasoningChange, reasoningEffort, thinking]);
+	}, [
+		modelSupportsReasoning,
+		onReasoningChange,
+		reasoningEffort,
+		reasoningResolved,
+		thinking,
+	]);
 
 	// Focus the composer on mount/variant change and when text is injected
 	// from outside (quick actions, queue undo). Deliberately NOT on every

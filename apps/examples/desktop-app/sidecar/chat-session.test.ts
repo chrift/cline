@@ -19,6 +19,7 @@ import {
 	hasProviderChanged,
 	mergeSessionConfig,
 	prewarmWorkspaceMetadata,
+	readSessionReasoningConfig,
 	resolveDesktopSessionMode,
 	rewriteDesktopTeamPrompt,
 	shouldUpdateSessionConnection,
@@ -196,6 +197,102 @@ describe("shouldUpdateSessionConnection", () => {
 				reasoningEffort: "high",
 			}),
 		).toBe(true);
+	});
+});
+
+describe("attach reasoning restore", () => {
+	const sessionId = "session-attach-reasoning";
+
+	function createAttachContext(config: Record<string, unknown>) {
+		return {
+			liveSessions: new Map([
+				[
+					sessionId,
+					{
+						config,
+						messages: [],
+						promptsInQueue: [],
+						busy: false,
+						startedAt: Date.now(),
+						status: "idle",
+					},
+				],
+			]),
+			restoringWorkspacePaths: new Set(),
+			streamIndices: new Map(),
+			wsClients: new Set(),
+			...localRuntimeContext(
+				{
+					get: vi.fn(async () => ({
+						sessionId,
+						status: "completed",
+						provider: "cline",
+						model: "anthropic/claude-sonnet-4.6",
+						cwd: "/workspace",
+						workspaceRoot: "/workspace",
+					})),
+				},
+				{ sessionIds: [sessionId] },
+			),
+		} as unknown as SidecarContext;
+	}
+
+	async function attach(config: Record<string, unknown>) {
+		return (await handleChatSessionCommand(createAttachContext(config), {
+			action: "attach",
+			sessionId,
+		})) as Record<string, unknown>;
+	}
+
+	it("returns the effort level the session was configured with", async () => {
+		const payload = await attach({
+			provider: "cline",
+			model: "anthropic/claude-sonnet-4.6",
+			thinking: true,
+			reasoningEffort: "medium",
+		});
+
+		expect(payload.thinking).toBe(true);
+		expect(payload.reasoningEffort).toBe("medium");
+	});
+
+	it("keeps an explicit None as thinking:false with no effort level", async () => {
+		const payload = await attach({
+			provider: "cline",
+			model: "anthropic/claude-sonnet-4.6",
+			thinking: false,
+		});
+
+		expect(payload.thinking).toBe(false);
+		expect(Object.hasOwn(payload, "reasoningEffort")).toBe(false);
+	});
+
+	it("reports nothing when the session never had an explicit choice", async () => {
+		const payload = await attach({
+			provider: "cline",
+			model: "anthropic/claude-sonnet-4.6",
+		});
+
+		expect(Object.hasOwn(payload, "thinking")).toBe(false);
+		expect(Object.hasOwn(payload, "reasoningEffort")).toBe(false);
+	});
+
+	it("normalizes the reasoning fields a session config carries", () => {
+		expect(
+			readSessionReasoningConfig({
+				thinking: true,
+				reasoningEffort: "high",
+			}),
+		).toEqual({ thinking: true, reasoningEffort: "high" });
+		// "None" wins over a stale effort left beside it, and an unknown level is
+		// dropped rather than forwarded to the model.
+		expect(
+			readSessionReasoningConfig({ thinking: false, reasoningEffort: "high" }),
+		).toEqual({ thinking: false });
+		expect(readSessionReasoningConfig({ reasoningEffort: "ultra" })).toEqual(
+			{},
+		);
+		expect(readSessionReasoningConfig(undefined)).toEqual({});
 	});
 });
 

@@ -435,6 +435,207 @@ describe("useChatSession", () => {
 		workspaceRoot: "/workspace",
 	};
 
+	it("restores a reopened session's reasoning settings from attach", async () => {
+		const sessionId = "session-reasoning-restore";
+		let releaseAttach: ((value: Record<string, unknown>) => void) | undefined;
+		const attach = new Promise<Record<string, unknown>>((resolve) => {
+			releaseAttach = resolve;
+		});
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "restore-user",
+							sessionId,
+							role: "user",
+							content: "Continue",
+							createdAt: 1,
+						},
+					];
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as { action?: string } | undefined;
+					if (request?.action === "attach") return await attach;
+				}
+				return [];
+			},
+		);
+
+		let hydration: Promise<void> | undefined;
+		await act(async () => {
+			hydration = current.hydrateSession({
+				sessionId,
+				status: "completed",
+				...cloudSessionConfig,
+				startedAt: "2026-09-01T00:00:00Z",
+			});
+			await Promise.resolve();
+		});
+		// Attach has not answered yet, so the reopened session's level is still
+		// unknown: the composer must not be allowed to default it, and the
+		// previous chat's selection must not be shown in its place.
+		expect(current.isReasoningResolved).toBe(false);
+		expect(current.config.reasoningEffort).toBeUndefined();
+
+		await act(async () => {
+			releaseAttach?.({
+				sessionId,
+				status: "completed",
+				thinking: true,
+				reasoningEffort: "medium",
+				...cloudSessionConfig,
+			});
+			await hydration;
+		});
+
+		expect(current.config.thinking).toBe(true);
+		expect(current.config.reasoningEffort).toBe("medium");
+		expect(current.isReasoningResolved).toBe(true);
+	});
+
+	it("restores an explicit None without an effort level", async () => {
+		const sessionId = "session-reasoning-none";
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "none-user",
+							sessionId,
+							role: "user",
+							content: "Continue",
+							createdAt: 1,
+						},
+					];
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as { action?: string } | undefined;
+					if (request?.action === "attach") {
+						return { sessionId, status: "completed", thinking: false };
+					}
+				}
+				return [];
+			},
+		);
+
+		await act(async () => {
+			await current.hydrateSession({
+				sessionId,
+				status: "completed",
+				...cloudSessionConfig,
+				startedAt: "2026-09-01T00:00:00Z",
+			});
+		});
+
+		expect(current.config.thinking).toBe(false);
+		expect(current.config.reasoningEffort).toBeUndefined();
+		expect(current.isReasoningResolved).toBe(true);
+	});
+
+	it("releases the reasoning gate when a hydration is superseded", async () => {
+		const sessionId = "session-reasoning-superseded";
+		let releaseAttach: ((value: Record<string, unknown>) => void) | undefined;
+		const attach = new Promise<Record<string, unknown>>((resolve) => {
+			releaseAttach = resolve;
+		});
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "superseded-user",
+							sessionId,
+							role: "user",
+							content: "Continue",
+							createdAt: 1,
+						},
+					];
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as { action?: string } | undefined;
+					if (request?.action === "attach") return await attach;
+				}
+				return [];
+			},
+		);
+
+		let hydration: Promise<void> | undefined;
+		await act(async () => {
+			hydration = current.hydrateSession({
+				sessionId,
+				status: "completed",
+				...cloudSessionConfig,
+				startedAt: "2026-09-01T00:00:00Z",
+			});
+			await Promise.resolve();
+		});
+		expect(current.isReasoningResolved).toBe(false);
+
+		// The attach never answers because a new chat replaced it. Leaving the
+		// gate closed would keep the thinking selector from ever defaulting.
+		await act(async () => {
+			await current.reset();
+			releaseAttach?.({
+				sessionId,
+				status: "completed",
+				...cloudSessionConfig,
+			});
+			await hydration;
+		});
+
+		expect(current.isReasoningResolved).toBe(true);
+	});
+
+	it("keeps a level the session never chose out of the client config", async () => {
+		const sessionId = "session-reasoning-absent";
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "absent-user",
+							sessionId,
+							role: "user",
+							content: "Continue",
+							createdAt: 1,
+						},
+					];
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as { action?: string } | undefined;
+					if (request?.action === "attach") {
+						return { sessionId, status: "completed", ...cloudSessionConfig };
+					}
+				}
+				return [];
+			},
+		);
+		await act(async () => {
+			current.setConfig((previous) => ({
+				...previous,
+				thinking: true,
+				reasoningEffort: "high",
+			}));
+		});
+
+		await act(async () => {
+			await current.hydrateSession({
+				sessionId,
+				status: "completed",
+				...cloudSessionConfig,
+				startedAt: "2026-09-01T00:00:00Z",
+			});
+		});
+
+		// Hydration clears the previous chat's selection so it is never shown on
+		// this one, and an attach that reports no reasoning leaves the value
+		// unclaimed rather than rewriting it.
+		expect(current.config.thinking).toBeUndefined();
+		expect(current.config.reasoningEffort).toBeUndefined();
+		expect(current.isReasoningResolved).toBe(true);
+	});
+
 	it("accepts a running snapshot when a repeated prompt has a new canonical id", async () => {
 		const sessionId = "session-repeated-status";
 		invokeMock.mockImplementation(

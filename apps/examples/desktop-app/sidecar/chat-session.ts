@@ -420,6 +420,35 @@ function readReasoningEffort(
 	return undefined;
 }
 
+export type SessionReasoningConfig = {
+	thinking?: boolean;
+	reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+};
+
+/**
+ * The reasoning settings a session was last configured with, read from its
+ * sidecar session config. Attach returns this so a reopened session can
+ * restore its effort level instead of letting the composer fall back to its
+ * own default—which the next send would then write back over the session.
+ *
+ * Both fields are omitted when the session never carried an explicit choice.
+ * That is not the same as "None", which is `thinking: false`.
+ */
+export function readSessionReasoningConfig(
+	config: JsonRecord | undefined,
+): SessionReasoningConfig {
+	const thinking =
+		typeof config?.thinking === "boolean" ? config.thinking : undefined;
+	const reasoningEffort =
+		thinking === false
+			? undefined
+			: readReasoningEffort(config?.reasoningEffort);
+	return {
+		...(thinking !== undefined ? { thinking } : {}),
+		...(reasoningEffort ? { reasoningEffort } : {}),
+	};
+}
+
 function readPositiveInteger(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value) && value > 0) {
 		return Math.trunc(value);
@@ -1149,6 +1178,10 @@ async function handleAttach(
 		workspaceRoot: session.workspaceRoot,
 		prompt: session.prompt,
 		metadata,
+		// The session's own reasoning settings, so a reopened chat restores them
+		// instead of letting the composer fall back to its default. Read last:
+		// the resolved config wins over anything sitting in `metadata`.
+		...readSessionReasoningConfig(baseAttachedConfig),
 	};
 }
 

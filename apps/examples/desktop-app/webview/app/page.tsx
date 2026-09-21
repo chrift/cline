@@ -1075,6 +1075,7 @@ function ChatThreadPane({
 		chatTransportState,
 		chatTransportError,
 		isHydratingSession,
+		isReasoningResolved,
 		isCloudSessionExpired,
 		activeAssistantMessageId,
 		activityLabel,
@@ -2382,6 +2383,7 @@ function ChatThreadPane({
 			promptDraft={promptDraft}
 			provider={config.provider}
 			reasoningEffort={config.reasoningEffort}
+			reasoningResolved={isReasoningResolved}
 			status={status}
 			summary={summary}
 			thinking={config.thinking}

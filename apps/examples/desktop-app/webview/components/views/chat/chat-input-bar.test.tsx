@@ -1546,6 +1546,85 @@ describe("ChatInputBar", () => {
 		});
 	});
 
+	it("holds the default effort until a reopened session's level is resolved", async () => {
+		loadProviderModelCatalogMock.mockResolvedValue({
+			providers: [],
+			enabledProviderIds: ["cline"],
+			providerModels: { cline: ["test-model"] },
+			providerReasoningModels: { cline: ["test-model"] },
+		});
+		const onReasoningChange = vi.fn();
+		const render = async (reasoningResolved: boolean) => {
+			await act(async () => {
+				root.render(
+					<WorkspaceProvider
+						value={{
+							workspaceRoot: "/workspace/cline",
+							workspaces: ["/workspace/cline"],
+							listWorkspaces: vi.fn(async () => ["/workspace/cline"]),
+							refreshWorkspaces: vi.fn(async () => undefined),
+							switchWorkspace: vi.fn(async () => true),
+							pickWorkspaceDirectory: vi.fn(async () => null),
+							selectChat: vi.fn(async () => true),
+						}}
+					>
+						<ChatInputBar
+							attachments={[]}
+							environmentId="local"
+							gitBranch="main"
+							mode="act"
+							model="test-model"
+							onAbort={vi.fn()}
+							onAttachFiles={vi.fn()}
+							onEditPromptInQueue={vi.fn()}
+							onListGitBranches={vi.fn(async () => ({
+								current: "main",
+								branches: ["main"],
+							}))}
+							onModeToggle={vi.fn()}
+							onModelChange={vi.fn()}
+							onPromptInputChange={vi.fn()}
+							onProviderChange={vi.fn()}
+							onReasoningChange={onReasoningChange}
+							onRemoveAttachment={vi.fn()}
+							onRemovePromptInQueue={vi.fn()}
+							onSend={vi.fn()}
+							onSteerPromptInQueue={vi.fn()}
+							onSwitchGitBranch={vi.fn(async () => true)}
+							promptDraft={{ version: 0, value: "" }}
+							promptsInQueue={[]}
+							provider="cline"
+							reasoningResolved={reasoningResolved}
+							status="idle"
+							summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
+						/>
+					</WorkspaceProvider>,
+				);
+			});
+		};
+
+		// Attach has not answered, so this session's level is unknown: neither the
+		// label nor the config may claim the composer's own default.
+		await render(false);
+		const trigger = await vi.waitFor(() => {
+			const element = container.querySelector<HTMLButtonElement>(
+				'[aria-label="Thinking level"]',
+			);
+			expect(element?.disabled).toBe(false);
+			return element as HTMLButtonElement;
+		});
+		expect(trigger.textContent).toContain("Reasoning");
+		expect(onReasoningChange).not.toHaveBeenCalled();
+
+		await render(true);
+		await vi.waitFor(() => {
+			expect(onReasoningChange).toHaveBeenCalledWith({
+				thinking: true,
+				reasoningEffort: "low",
+			});
+		});
+	});
+
 	it.each(["local", "cloud"] as const)("shows %s queued prompts in an accessible list with clear priority actions", async (executionTarget) => {
 		const onSteerPromptInQueue = vi
 			.fn()
