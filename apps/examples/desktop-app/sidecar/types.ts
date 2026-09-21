@@ -25,6 +25,8 @@ export type ChatSessionCommandRequest = {
 	action:
 		| "start"
 		| "attach"
+		/** Applies reasoning settings to an open session without a prompt. */
+		| "configure"
 		| "send"
 		| "stop"
 		| "abort"

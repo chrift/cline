@@ -435,6 +435,141 @@ describe("useChatSession", () => {
 		workspaceRoot: "/workspace",
 	};
 
+	it("pushes an unsent choice to the session instead of waiting for a send", async () => {
+		const sessionId = "session-configure-push";
+		const requests: Array<{
+			action?: string;
+			config?: Record<string, unknown>;
+		}> = [];
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "push-user",
+							sessionId,
+							role: "user",
+							content: "Continue",
+							createdAt: 1,
+						},
+					];
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as {
+						action?: string;
+						config?: Record<string, unknown>;
+					};
+					requests.push(request);
+					if (request?.action === "attach") {
+						return {
+							sessionId,
+							status: "completed",
+							thinking: true,
+							reasoningEffort: "medium",
+							...cloudSessionConfig,
+						};
+					}
+				}
+				return [];
+			},
+		);
+		await act(async () => {
+			await current.hydrateSession({
+				sessionId,
+				status: "completed",
+				...cloudSessionConfig,
+				startedAt: "2026-09-01T00:00:00Z",
+			});
+		});
+
+		await act(async () => {
+			current.selectReasoning({ thinking: true, reasoningEffort: "low" });
+		});
+
+		expect(requests).toContainEqual(
+			expect.objectContaining({
+				action: "configure",
+				sessionId,
+				config: expect.objectContaining({
+					thinking: true,
+					reasoningEffort: "low",
+				}),
+			}),
+		);
+	});
+
+	it("starts a new chat at the level chosen last", async () => {
+		await act(async () => {
+			current.selectReasoning({ thinking: true, reasoningEffort: "high" });
+		});
+		expect(current.config.reasoningEffort).toBe("high");
+
+		await act(async () => {
+			await current.reset();
+		});
+
+		expect(current.config.thinking).toBe(true);
+		expect(current.config.reasoningEffort).toBe("high");
+	});
+
+	it("keeps the level chosen for a chat even when it was never sent", async () => {
+		const sessionId = "session-unsent-choice";
+		const otherSessionId = "session-other-chat";
+		const attachWith = (id: string, reasoningEffort: string) => ({
+			sessionId: id,
+			status: "completed",
+			thinking: true,
+			reasoningEffort,
+			...cloudSessionConfig,
+		});
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				const request = args?.request as { action?: string } | undefined;
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: `${sessionId}-user`,
+							sessionId: request?.action ? sessionId : sessionId,
+							role: "user",
+							content: "Continue",
+							createdAt: 1,
+						},
+					];
+				}
+				if (command === "chat_session_command") {
+					if (request?.action === "attach") {
+						return attachWith(String(request.sessionId ?? sessionId), "high");
+					}
+				}
+				return [];
+			},
+		);
+		const openSession = async (id: string) => {
+			await act(async () => {
+				await current.hydrateSession({
+					sessionId: id,
+					status: "completed",
+					...cloudSessionConfig,
+					startedAt: "2026-09-01T00:00:00Z",
+				});
+			});
+		};
+
+		await openSession(sessionId);
+		expect(current.config.reasoningEffort).toBe("high");
+
+		// What the composer does when the user picks Low. No prompt is sent, so
+		// the only thing that can restore it on reopen is this chat's own memory.
+		await act(async () => {
+			current.selectReasoning({ thinking: true, reasoningEffort: "low" });
+		});
+
+		await openSession(otherSessionId);
+		await openSession(sessionId);
+
+		expect(current.config.reasoningEffort).toBe("low");
+	});
+
 	it("restores a reopened session's reasoning settings from attach", async () => {
 		const sessionId = "session-reasoning-restore";
 		let releaseAttach: ((value: Record<string, unknown>) => void) | undefined;

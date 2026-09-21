@@ -49,6 +49,7 @@ import { humanizeCloudSessionError } from "@/lib/cloud-session-error";
 import { appendCappedCommandOutput } from "@/lib/command-output";
 import { desktopClient } from "@/lib/desktop-client";
 import { imageAttachmentMediaType } from "@/lib/image-attachments";
+import { rememberLastReasoning } from "@/lib/model-selection";
 import {
 	buildSessionDiffState,
 	EMPTY_DIFF_SUMMARY,
@@ -63,6 +64,11 @@ import {
 } from "@/lib/session-history";
 import { eventEnvironmentId } from "@/lib/session-identity";
 import { readImportedHistorySummaryActivity } from "@/lib/session-import";
+import {
+	readRememberedReasoning,
+	rememberReasoningForSession,
+	type SessionReasoningChoice,
+} from "@/lib/session-reasoning";
 import {
 	isTaskWorktreePath,
 	LOCAL_WORKSPACE_ENVIRONMENT_ID,
@@ -2619,6 +2625,12 @@ export function useChatSession(environmentId: string) {
 				workspaceRoot,
 			});
 			setHydratedHistorySessionId(null);
+			// Start is where a brand new chat learns its real id, so this is the
+			// first moment its level can be remembered against it.
+			rememberReasoningForSession(id, {
+				thinking: boundConfig.thinking,
+				reasoningEffort: boundConfig.reasoningEffort,
+			});
 			return id;
 		},
 		[environmentId, postSession],
@@ -3751,6 +3763,10 @@ export function useChatSession(environmentId: string) {
 				sessionId: undefined,
 				provider: initial.provider,
 				model: initial.model,
+				// A new chat inherits the level chosen last, not whatever the chat
+				// being left behind ended up configured with.
+				thinking: initial.thinking,
+				reasoningEffort: initial.reasoningEffort,
 				apiKey:
 					prev.provider === initial.provider ? prev.apiKey : initial.apiKey,
 				...(leavingTaskWorktree
@@ -3793,6 +3809,44 @@ export function useChatSession(environmentId: string) {
 		setPromptsInQueue,
 	]);
 
+	/**
+	 * Applies a reasoning level choice everywhere it belongs: to this chat, to this
+	 * chat's memory (so switching away and back restores it even when no prompt was
+	 * ever sent with it), to the app-wide default new chats start from, and to the
+	 * live session, so the host agrees with what the composer shows.
+	 */
+	const selectReasoning = useCallback(
+		(next: SessionReasoningChoice) => {
+			// Coerced here so a stored entry can never hold None beside a level.
+			const choice: SessionReasoningChoice =
+				next.thinking === false
+					? { thinking: false, reasoningEffort: undefined }
+					: { thinking: true, reasoningEffort: next.reasoningEffort };
+			const activeSessionId = activeSessionIdRef.current;
+			if (activeSessionId) {
+				rememberReasoningForSession(activeSessionId, choice);
+			}
+			rememberLastReasoning(choice);
+			setConfig((prev) =>
+				prev.thinking === choice.thinking &&
+				prev.reasoningEffort === choice.reasoningEffort
+					? prev
+					: { ...prev, ...choice },
+			);
+			if (!activeSessionId) {
+				return;
+			}
+			// Best-effort: the level also travels with every send, and the per-chat
+			// memory already covers switching away and back inside this app.
+			postSession({
+				action: "configure",
+				sessionId: activeSessionId,
+				config: choice,
+			}).catch(() => undefined);
+		},
+		[postSession],
+	);
+
 	const hydrateSession = useCallback(
 		async (session: SessionHistoryItem) => {
 			if (
@@ -3805,6 +3859,10 @@ export function useChatSession(environmentId: string) {
 			}
 			const requestId = hydrationRequestIdRef.current + 1;
 			const hydrationStartedAt = Date.now();
+			// What was last chosen for this chat on this device outranks the host,
+			// because that choice may never have been sent and the host can still be
+			// holding the level from before it.
+			const rememberedReasoning = readRememberedReasoning(session.sessionId);
 			hydrationRequestIdRef.current = requestId;
 			setIsCloudSessionExpired(
 				session.origin === "cloud" && session.status === "expired",
@@ -3831,10 +3889,10 @@ export function useChatSession(environmentId: string) {
 				model: session.model || prev.model,
 				workspaceRoot: session.workspaceRoot || prev.workspaceRoot,
 				cwd: session.workspaceRoot || session.cwd || prev.cwd,
-				// Drop the previous session's settings before this one's attach
-				// answers, so the selector never shows another chat's effort.
-				thinking: undefined,
-				reasoningEffort: undefined,
+				// Drop the previous session's settings before this one's are applied,
+				// so the selector never shows another chat's effort.
+				thinking: rememberedReasoning?.thinking,
+				reasoningEffort: rememberedReasoning?.reasoningEffort,
 			}));
 			activeSessionIdRef.current = session.sessionId;
 			activeAssistantMessageIdRef.current = null;
@@ -3958,8 +4016,9 @@ export function useChatSession(environmentId: string) {
 				// never had an explicit choice: leave the client's value alone rather
 				// than clearing it and letting the composer default rewrite the session.
 				const attachedCarriesReasoning =
-					attached?.thinking !== undefined ||
-					attached?.reasoningEffort !== undefined;
+					!rememberedReasoning &&
+					(attached?.thinking !== undefined ||
+						attached?.reasoningEffort !== undefined);
 				setConfig((prev) => ({
 					...prev,
 					environmentId,
@@ -4245,6 +4304,7 @@ export function useChatSession(environmentId: string) {
 		setWorkspacePath,
 		start,
 		hydrateSession,
+		selectReasoning,
 		sendPrompt,
 		steerPromptInQueue,
 		updatePromptInQueue,

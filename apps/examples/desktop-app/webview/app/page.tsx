@@ -1102,6 +1102,7 @@ function ChatThreadPane({
 		reset,
 		abort,
 		hydrateSession,
+		selectReasoning,
 	} = useChatSession(environmentId);
 	// Bind the runtime session to the thread so deleting it elsewhere (e.g.
 	// the sidebar) can close this pane even when it was not opened from history.
@@ -1832,26 +1833,6 @@ function ChatThreadPane({
 		],
 	);
 
-	const handleReasoningChange = useCallback(
-		(next: Pick<ChatSessionConfig, "thinking" | "reasoningEffort">) => {
-			setConfig((prev) => {
-				if (
-					prev.thinking === next.thinking &&
-					prev.reasoningEffort === next.reasoningEffort
-				) {
-					return prev;
-				}
-				return {
-					...prev,
-					thinking: next.thinking,
-					reasoningEffort:
-						next.thinking === false ? undefined : next.reasoningEffort,
-				};
-			});
-		},
-		[setConfig],
-	);
-
 	const handleRemoveQueuedPrompt = useCallback(
 		async (promptId: string) => {
 			await removePromptInQueue(promptId);
@@ -2365,7 +2346,7 @@ function ChatThreadPane({
 			onModeToggle={handleModeToggle}
 			onPromptInputChange={handlePromptInputChange}
 			onOpenModelSettings={onOpenModelSettings}
-			onReasoningChange={handleReasoningChange}
+			onReasoningChange={selectReasoning}
 			onSteerPromptInQueue={steerPromptInQueue}
 			onEditPromptInQueue={updatePromptInQueue}
 			onRemovePromptInQueue={handleRemoveQueuedPrompt}

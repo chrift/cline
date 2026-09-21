@@ -296,6 +296,146 @@ describe("attach reasoning restore", () => {
 	});
 });
 
+describe("configure reasoning", () => {
+	const sessionId = "session-configure-reasoning";
+
+	function createContext() {
+		const updateSessionConnection = vi.fn(async () => undefined);
+		const send = vi.fn(async () => {
+			throw new Error("configure must not dispatch a prompt");
+		});
+		const ctx = {
+			liveSessions: new Map([
+				[
+					sessionId,
+					{
+						config: {
+							provider: "cline",
+							model: "anthropic/claude-sonnet-4.6",
+							thinking: true,
+							reasoningEffort: "medium",
+						},
+						messages: [],
+						promptsInQueue: [],
+						busy: false,
+						startedAt: Date.now(),
+						status: "idle",
+					},
+				],
+			]),
+			restoringWorkspacePaths: new Set(),
+			streamIndices: new Map(),
+			wsClients: new Set(),
+			...localRuntimeContext(
+				{
+					get: vi.fn(async () => ({ sessionId, status: "idle" })),
+					send,
+					updateSessionConnection,
+				},
+				{ sessionIds: [sessionId] },
+			),
+		} as unknown as SidecarContext;
+		return { ctx, updateSessionConnection };
+	}
+
+	it("applies a level to the live session without dispatching a prompt", async () => {
+		const { ctx, updateSessionConnection } = createContext();
+
+		await expect(
+			handleChatSessionCommand(ctx, {
+				action: "configure",
+				sessionId,
+				config: { thinking: true, reasoningEffort: "low" },
+			}),
+		).resolves.toMatchObject({ sessionId, updated: true });
+
+		expect(updateSessionConnection).toHaveBeenCalledWith(sessionId, {
+			thinking: true,
+			reasoningEffort: "low",
+			// A configure is an explicit set, so any earlier budget override clears.
+			thinkingBudgetTokens: null,
+		});
+		expect(ctx.liveSessions.get(sessionId)?.config.reasoningEffort).toBe("low");
+	});
+
+	it("clears the level beside an explicit None", async () => {
+		const { ctx, updateSessionConnection } = createContext();
+
+		await handleChatSessionCommand(ctx, {
+			action: "configure",
+			sessionId,
+			config: { thinking: false, reasoningEffort: "low" },
+		});
+
+		expect(updateSessionConnection).toHaveBeenCalledWith(sessionId, {
+			thinking: false,
+			reasoningEffort: null,
+			thinkingBudgetTokens: null,
+		});
+		const config = ctx.liveSessions.get(sessionId)?.config;
+		expect(config?.thinking).toBe(false);
+		expect(config?.reasoningEffort).toBeUndefined();
+	});
+
+	it("ignores provider and model so a send can still detect a switch", async () => {
+		const { ctx, updateSessionConnection } = createContext();
+
+		await handleChatSessionCommand(ctx, {
+			action: "configure",
+			sessionId,
+			config: {
+				provider: "openai",
+				model: "gpt-5.3-codex",
+				thinking: true,
+				reasoningEffort: "high",
+			},
+		});
+
+		expect(updateSessionConnection).toHaveBeenCalledWith(sessionId, {
+			thinking: true,
+			reasoningEffort: "high",
+			thinkingBudgetTokens: null,
+		});
+		expect(ctx.liveSessions.get(sessionId)?.config.provider).toBe("cline");
+	});
+
+	it("reports no update when the chat never chose or is unknown", async () => {
+		const { ctx, updateSessionConnection } = createContext();
+
+		await expect(
+			handleChatSessionCommand(ctx, { action: "configure", sessionId }),
+		).resolves.toMatchObject({ sessionId, updated: false });
+		await expect(
+			handleChatSessionCommand(ctx, {
+				action: "configure",
+				sessionId: "session-unknown",
+				config: { thinking: true, reasoningEffort: "high" },
+			}),
+		).resolves.toMatchObject({ sessionId: "session-unknown", updated: false });
+		expect(updateSessionConnection).not.toHaveBeenCalled();
+	});
+
+	it("skips the round trip when the level is already set", async () => {
+		const { ctx, updateSessionConnection } = createContext();
+
+		await expect(
+			handleChatSessionCommand(ctx, {
+				action: "configure",
+				sessionId,
+				config: { thinking: true, reasoningEffort: "medium" },
+			}),
+		).resolves.toMatchObject({ sessionId, updated: false });
+		expect(updateSessionConnection).not.toHaveBeenCalled();
+	});
+
+	it("requires a session id", async () => {
+		const { ctx } = createContext();
+		await expect(
+			handleChatSessionCommand(ctx, { action: "configure" }),
+		).rejects.toThrow("sessionId is required");
+	});
+});
+
 describe("hasProviderChanged", () => {
 	it("distinguishes provider switches from model switches", () => {
 		expect(

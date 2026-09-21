@@ -1185,6 +1185,62 @@ async function handleAttach(
 	};
 }
 
+/**
+ * Applies a reasoning-level change the user made in the composer without
+ * dispatching a prompt, so the session is really configured with it even when
+ * the next message goes elsewhere first.
+ *
+ * Reasoning only, deliberately: writing provider or model here would make the
+ * next send's `hasProviderChanged` comparison blind to a switch that never
+ * rebuilt the session, leaving it running on the previous provider.
+ */
+async function handleConfigure(
+	ctx: SidecarContext,
+	request: ChatSessionCommandRequest,
+): Promise<unknown> {
+	const sessionId = request.sessionId?.trim();
+	if (!sessionId) {
+		throw new Error("sessionId is required");
+	}
+	const reasoning = readSessionReasoningConfig(request.config);
+	const session = ctx.liveSessions.get(sessionId);
+	if (!session || Object.keys(reasoning).length === 0) {
+		return { sessionId, updated: false };
+	}
+	// Re-applying the level the chat already has must not reach the runtime
+	// host: the composer can restore a value it never changed, and a no-op
+	// write mid-turn would look like a config change.
+	if (
+		JSON.stringify(readSessionReasoningConfig(session.config)) ===
+		JSON.stringify(reasoning)
+	) {
+		return { sessionId, updated: false };
+	}
+	const binding = await findSessionRuntimeBinding(ctx, sessionId);
+	if (binding) {
+		// buildSessionConnectionUpdate owns the transition rules, so an explicit
+		// "None" clears the level beside it instead of leaving both set.
+		await binding.sessionManager.updateSessionConnection(
+			sessionId,
+			buildSessionConnectionUpdate({ ...reasoning }),
+		);
+	}
+	// An explicit None clears the level beside it, so a later attach cannot
+	// report a level for a chat that has reasoning off.
+	session.config = {
+		...session.config,
+		...reasoning,
+		...(reasoning.thinking === false
+			? { reasoningEffort: undefined, thinkingBudgetTokens: undefined }
+			: {}),
+	};
+	return {
+		sessionId,
+		updated: true,
+		environmentId: binding?.environmentId,
+	};
+}
+
 async function startRebuiltSession(
 	manager: ClineCore,
 	ctx: SidecarContext,
@@ -2095,6 +2151,7 @@ const ACTION_HANDLERS: Record<
 > = {
 	start: handleStart,
 	attach: handleAttach,
+	configure: handleConfigure,
 	send: handleSend,
 	stop: handleStop,
 	abort: handleAbort,
@@ -2229,6 +2286,21 @@ export async function handleChatSessionCommand(
 				if (!sessionId || !promptId)
 					throw new Error("sessionId and promptId are required");
 				return await cloud.removePendingPrompt(sessionId, promptId);
+			}
+			case "configure": {
+				if (!sessionId) throw new Error("sessionId is required");
+				// A cloud session's inner session is built from this config, so recording
+				// the choice here is what makes the next turn use it.
+				const live = ctx.liveSessions.get(sessionId);
+				const reasoning = readSessionReasoningConfig(request.config);
+				if (live && Object.keys(reasoning).length > 0) {
+					Object.assign(live.config, reasoning, {
+						...(reasoning.thinking === false
+							? { reasoningEffort: undefined }
+							: {}),
+					});
+				}
+				return { sessionId, updated: Boolean(live) };
 			}
 			default:
 				throw new Error(

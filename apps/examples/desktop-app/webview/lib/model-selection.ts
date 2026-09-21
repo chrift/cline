@@ -1,8 +1,18 @@
+import {
+	parseSessionReasoningChoice,
+	type SessionReasoningChoice,
+} from "./session-reasoning";
+
 export const MODEL_SELECTION_STORAGE_KEY = "cline.code.model-selection.v1";
 
 export type ModelSelectionStorage = {
 	lastProvider: string;
 	lastModelByProvider: Record<string, string>;
+	/**
+	 * The reasoning level the user last picked, so a new chat starts where they
+	 * left off instead of at a built-in default. Absent until they pick once.
+	 */
+	lastReasoning?: SessionReasoningChoice;
 };
 
 function sanitizeStringRecord(value: unknown): Record<string, string> {
@@ -39,15 +49,18 @@ export function parseModelSelectionStorage(
 		const shaped = parsed as {
 			lastProvider?: unknown;
 			lastModelByProvider?: unknown;
+			lastReasoning?: unknown;
 		};
 
 		if ("lastProvider" in shaped || "lastModelByProvider" in shaped) {
+			const lastReasoning = parseSessionReasoningChoice(shaped.lastReasoning);
 			return {
 				lastProvider:
 					typeof shaped.lastProvider === "string"
 						? shaped.lastProvider.trim()
 						: "",
 				lastModelByProvider: sanitizeStringRecord(shaped.lastModelByProvider),
+				...(lastReasoning ? { lastReasoning } : {}),
 			};
 		}
 
@@ -78,8 +91,26 @@ export function writeModelSelectionStorageToWindow(
 	if (typeof window === "undefined") {
 		return;
 	}
+	// The provider/model writers never touch reasoning and the reasoning writer
+	// never touches provider/model, so merge over what is already stored instead
+	// of letting either side wipe the other.
+	const previous = parseModelSelectionStorage(
+		window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY),
+	);
 	window.localStorage.setItem(
 		MODEL_SELECTION_STORAGE_KEY,
-		JSON.stringify(value),
+		JSON.stringify({
+			...previous,
+			...value,
+			lastReasoning: value.lastReasoning ?? previous.lastReasoning,
+		}),
 	);
+}
+
+/** Records the level a new chat should start with. */
+export function rememberLastReasoning(choice: SessionReasoningChoice): void {
+	writeModelSelectionStorageToWindow({
+		...readModelSelectionStorageFromWindow(),
+		lastReasoning: choice,
+	});
 }

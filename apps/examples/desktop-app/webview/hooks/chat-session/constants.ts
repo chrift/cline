@@ -62,5 +62,14 @@ export function getInitialChatConfig(environmentId: string): ChatSessionConfig {
 		model,
 		workspaceRoot: workspaceSelection.lastWorkspace,
 		cwd: workspaceSelection.lastWorkspace,
+		// A new chat starts at the level the user last picked rather than at a
+		// built-in default, which is also what makes the composer's fallback
+		// reachable only before their first-ever choice.
+		...(selection.lastReasoning
+			? {
+					thinking: selection.lastReasoning.thinking,
+					reasoningEffort: selection.lastReasoning.reasoningEffort,
+				}
+			: {}),
 	};
 }
